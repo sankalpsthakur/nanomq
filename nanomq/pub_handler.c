@@ -792,7 +792,7 @@ rule_table_name(rule *r)
 }
 
 static char *
-compose_sql_clause(rule *info, char *key, char *value,
+compose_sql_clause(rule *info, sbuf_t *key, sbuf_t *value,
                    bool is_need_set, int j, nano_work *work)
 {
     if (!info || !work || !info->flag[j])
@@ -941,8 +941,8 @@ compose_sql_clause(rule *info, char *key, char *value,
         break;
     }
 
-    strcat(key, key_sb.buf);
-    strcat(value, val_sb.buf);
+    sbuf_append(key, key_sb.buf);
+    sbuf_append(value, val_sb.buf);
     char *ret = alter_sb.len ? nng_strdup(alter_sb.buf) : NULL;
 
     sbuf_free(&key_sb);
@@ -1340,10 +1340,13 @@ rule_engine_insert_sql(nano_work *work)
 
 #if defined(SUPP_MYSQL)
 			if (RULE_ENG_MDB & work->config->rule_eng.option && RULE_FORWORD_MYSQL == rules[i].forword_type) {
-				char sql_clause[1024] = "INSERT INTO ";
-				char key[128]         = { 0 };
-				snprintf(key, 128, "%s (", rules[i].mysql->table);
-				char value[800]       = "VALUES (";
+				sbuf_t key, value, sql_sb;
+				sbuf_init(&key, 256);
+				sbuf_init(&value, 512);
+				sbuf_init(&sql_sb, 1024);
+				sbuf_appendf(&key, "%s (", rules[i].mysql->table);
+				sbuf_append(&value, "VALUES (");
+				sbuf_append(&sql_sb, "INSERT INTO ");
 				for (size_t j = 0; j < 9; j++) {
 					nng_mtx_lock(rule_mutex);
 					if (true == is_first_time_mysql) {
@@ -1351,7 +1354,7 @@ rule_engine_insert_sql(nano_work *work)
 					}
 					char *ret =
 					    compose_sql_clause(&rules[i],
-					        key, value, is_need_set_mysql, j, work);
+					        &key, &value, is_need_set_mysql, j, work);
 
 					if (ret && is_need_set_mysql) {
 						is_need_set_mysql = false;
@@ -1387,15 +1390,20 @@ rule_engine_insert_sql(nano_work *work)
 
 				
 
-				log_debug("%s", key);
-				log_debug("%s", value);
-				char *p = strrchr(key, ',');
-				*p      = ')';
-				p       = strrchr(value, ',');
-				*p      = ')';
-				strcat(sql_clause, key);
-				strcat(sql_clause, value);
-				strcat(sql_clause, ";");
+				log_debug("%s", key.buf);
+				log_debug("%s", value.buf);
+				char *p = strrchr(key.buf, ',');
+				if (p)
+					*p = ')';
+				p = strrchr(value.buf, ',');
+				if (p)
+					*p = ')';
+				sbuf_append(&sql_sb, key.buf);
+				sbuf_append(&sql_sb, value.buf);
+				sbuf_append(&sql_sb, ";");
+				sbuf_free(&key);
+				sbuf_free(&value);
+				char *sql_clause = sql_sb.buf;
 
 				log_debug("%s", sql_clause);
   				if (mysql_query(rules[i].mysql->conn, sql_clause)) {
@@ -1403,6 +1411,7 @@ rule_engine_insert_sql(nano_work *work)
   					mysql_close(rules[i].mysql->conn);
   					exit(1);
   				}
+				sbuf_free(&sql_sb);
 			}
 #endif
 
@@ -1424,10 +1433,13 @@ rule_engine_insert_sql(nano_work *work)
 					work->pgconn = conn;
 				}
 
-				char sql_clause[1024] = "INSERT INTO ";
-				char key[128]         = { 0 };
-				snprintf(key, 128, "%s (", rules[i].postgresql->table);
-				char value[800]       = "VALUES (";
+				sbuf_t key, value, sql_sb;
+				sbuf_init(&key, 256);
+				sbuf_init(&value, 512);
+				sbuf_init(&sql_sb, 1024);
+				sbuf_appendf(&key, "%s (", rules[i].postgresql->table);
+				sbuf_append(&value, "VALUES (");
+				sbuf_append(&sql_sb, "INSERT INTO ");
 				for (size_t j = 0; j < 9; j++) {
 
 					nng_mtx_lock(rule_mutex);
@@ -1437,7 +1449,7 @@ rule_engine_insert_sql(nano_work *work)
 					}
 					char *ret =
 					    compose_sql_clause(&rules[i],
-					        key, value, is_need_set_postgresql, j, work);
+					        &key, &value, is_need_set_postgresql, j, work);
 
 					if (ret && is_need_set_postgresql) {
 						is_need_set_postgresql = false;
@@ -1480,16 +1492,20 @@ rule_engine_insert_sql(nano_work *work)
 
 
 
-				/* log_debug("%s", key); */
-				/* log_debug("%s", value); */
-
-				char *p = strrchr(key, ',');
-				*p      = ')';
-				p       = strrchr(value, ',');
-				*p      = ')';
-				strcat(sql_clause, key);
-				strcat(sql_clause, value);
-				strcat(sql_clause, ";");
+				log_debug("%s", key.buf);
+				log_debug("%s", value.buf);
+				char *p = strrchr(key.buf, ',');
+				if (p)
+					*p = ')';
+				p = strrchr(value.buf, ',');
+				if (p)
+					*p = ')';
+				sbuf_append(&sql_sb, key.buf);
+				sbuf_append(&sql_sb, value.buf);
+				sbuf_append(&sql_sb, ";");
+				sbuf_free(&key);
+				sbuf_free(&value);
+				char *sql_clause = sql_sb.buf;
 
 				log_debug("%s", sql_clause);
 
@@ -1507,6 +1523,7 @@ rule_engine_insert_sql(nano_work *work)
 				PQclear(res);
 
 
+				sbuf_free(&sql_sb);
 			}
 #endif
 
@@ -1527,10 +1544,13 @@ rule_engine_insert_sql(nano_work *work)
 					work->tsconn = conn;
 				}
 
-				char sql_clause[1024] = "INSERT INTO ";
-				char key[128]         = { 0 };
-				snprintf(key, 128, "%s (", rules[i].timescaledb->table);
-				char value[800]       = "VALUES (";
+				sbuf_t key, value, sql_sb;
+				sbuf_init(&key, 256);
+				sbuf_init(&value, 512);
+				sbuf_init(&sql_sb, 1024);
+				sbuf_appendf(&key, "%s (", rules[i].timescaledb->table);
+				sbuf_append(&value, "VALUES (");
+				sbuf_append(&sql_sb, "INSERT INTO ");
 				for (size_t j = 0; j < 9; j++) {
 
 					nng_mtx_lock(rule_mutex);
@@ -1540,7 +1560,7 @@ rule_engine_insert_sql(nano_work *work)
 					}
 					char *ret =
 					    compose_sql_clause(&rules[i],
-					        key, value, is_need_set_timescaledb, j, work);
+					        &key, &value, is_need_set_timescaledb, j, work);
 
 					if (ret && is_need_set_timescaledb) {
 						is_need_set_timescaledb = false;
@@ -1582,16 +1602,20 @@ rule_engine_insert_sql(nano_work *work)
 				}
 
 
-				/* log_debug("%s", key); */
-				/* log_debug("%s", value); */
-
-				char *p = strrchr(key, ',');
-				*p      = ')';
-				p       = strrchr(value, ',');
-				*p      = ')';
-				strcat(sql_clause, key);
-				strcat(sql_clause, value);
-				strcat(sql_clause, ";");
+				log_debug("%s", key.buf);
+				log_debug("%s", value.buf);
+				char *p = strrchr(key.buf, ',');
+				if (p)
+					*p = ')';
+				p = strrchr(value.buf, ',');
+				if (p)
+					*p = ')';
+				sbuf_append(&sql_sb, key.buf);
+				sbuf_append(&sql_sb, value.buf);
+				sbuf_append(&sql_sb, ";");
+				sbuf_free(&key);
+				sbuf_free(&value);
+				char *sql_clause = sql_sb.buf;
 
 				log_debug("%s", sql_clause);
 
@@ -1607,6 +1631,7 @@ rule_engine_insert_sql(nano_work *work)
   				}
 
 				PQclear(res);
+				sbuf_free(&sql_sb);
 			}
 #endif
 
