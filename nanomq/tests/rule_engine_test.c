@@ -185,6 +185,48 @@ main(void)
 	assert(strstr(uaf_output, "\"y\"") != NULL);
 	assert(strstr(uaf_output, "[]") != NULL);
 	assert(test_env_pclose_timeout(sub, 2000) == 0);
+
+#if defined(NNG_SUPP_SQLITE)
+	// An empty payload (the way a retained message is cleared) has a NULL
+	// payload buffer. A select * rule that stores into SQLite must not crash.
+	char empty_sub_command[256];
+	char empty_pub_command[256];
+	char empty_output[256] = { 0 };
+
+	snprintf(rule_request, sizeof(rule_request),
+	    "curl -sS -i --basic -u admin_test:pw_test --connect-timeout 1 "
+	    "--max-time 5 'http://127.0.0.1:8081/api/v4/rules' -X POST -d "
+	    "'{\"rawsql\":\"select * from \\\"rule/empty\\\"\","
+	    "\"actions\":[{\"name\":\"sqlite\",\"params\":{"
+	    "\"table\":\"rule_empty_payload\"}}],"
+	    "\"description\":\"rule-engine-empty-payload\"}'");
+	assert(run_rule_request(rule_request, RULE_HTTP_OK, 0));
+
+	snprintf(empty_pub_command, sizeof(empty_pub_command),
+	    "mosquitto_pub -h 127.0.0.1 -p %s -t rule/empty -n -q 1",
+	    test_port);
+	pub = test_env_popen(empty_pub_command, "r");
+	assert(pub != NULL);
+	assert(test_env_pclose_timeout(pub, 10000) == 0);
+
+	// The broker is still up: a later message is delivered.
+	snprintf(empty_sub_command, sizeof(empty_sub_command),
+	    "mosquitto_sub -h 127.0.0.1 -p %s -t rule/alive -q 1 -C 1 -W 8",
+	    test_port);
+	sub = test_env_popen(empty_sub_command, "r");
+	assert(sub != NULL);
+	nng_msleep(300);
+	snprintf(empty_pub_command, sizeof(empty_pub_command),
+	    "mosquitto_pub -h 127.0.0.1 -p %s -t rule/alive -m alive -q 1",
+	    test_port);
+	pub = test_env_popen(empty_pub_command, "r");
+	assert(pub != NULL);
+	assert(test_env_pclose_timeout(pub, 10000) == 0);
+	assert(test_env_read_stream_timeout(
+	    sub, empty_output, sizeof(empty_output), 9000, 25));
+	assert(strstr(empty_output, "alive") != NULL);
+	assert(test_env_pclose_timeout(sub, 2000) == 0);
+#endif
 #endif
 
 	broker_stop_for_test();
