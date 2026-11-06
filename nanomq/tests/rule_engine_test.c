@@ -1,4 +1,7 @@
 #include "tests_api.h"
+#if defined(NNG_SUPP_SQLITE)
+#include <nng/supplemental/sqlite/sqlite3.h>
+#endif
 
 #define RULE_HTTP_OK "HTTP/1.1 200"
 #define RULE_HTTP_BAD_REQUEST "HTTP/1.1 400"
@@ -185,6 +188,77 @@ main(void)
 	assert(strstr(uaf_output, "\"y\"") != NULL);
 	assert(strstr(uaf_output, "[]") != NULL);
 	assert(test_env_pclose_timeout(sub, 2000) == 0);
+
+#if defined(NNG_SUPP_SQLITE)
+	// The sqlite rule comes after the two repub rules, so it is rules[2]. It
+	// must store a message in its own table. An empty payload (the way a
+	// retained message is cleared) has a NULL payload buffer and must not
+	// crash the broker either.
+	char empty_sub_command[256];
+	char empty_pub_command[256];
+	char empty_output[256] = { 0 };
+
+	snprintf(rule_request, sizeof(rule_request),
+	    "curl -sS -i --basic -u admin_test:pw_test --connect-timeout 1 "
+	    "--max-time 5 'http://127.0.0.1:8081/api/v4/rules' -X POST -d "
+	    "'{\"rawsql\":\"select * from \\\"rule/empty\\\"\","
+	    "\"actions\":[{\"name\":\"sqlite\",\"params\":{"
+	    "\"table\":\"rule_empty_payload\"}}],"
+	    "\"description\":\"rule-engine-empty-payload\"}'");
+	assert(run_rule_request(rule_request, RULE_HTTP_OK, 0));
+
+	snprintf(empty_pub_command, sizeof(empty_pub_command),
+	    "mosquitto_pub -h 127.0.0.1 -p %s -t rule/empty -m stored -q 1",
+	    test_port);
+	pub = test_env_popen(empty_pub_command, "r");
+	assert(pub != NULL);
+	assert(test_env_pclose_timeout(pub, 10000) == 0);
+
+	snprintf(empty_pub_command, sizeof(empty_pub_command),
+	    "mosquitto_pub -h 127.0.0.1 -p %s -t rule/empty -n -q 1",
+	    test_port);
+	pub = test_env_popen(empty_pub_command, "r");
+	assert(pub != NULL);
+	assert(test_env_pclose_timeout(pub, 10000) == 0);
+
+	// The broker is still up: a later message is delivered.
+	snprintf(empty_sub_command, sizeof(empty_sub_command),
+	    "mosquitto_sub -h 127.0.0.1 -p %s -t rule/alive -q 1 -C 1 -W 8",
+	    test_port);
+	sub = test_env_popen(empty_sub_command, "r");
+	assert(sub != NULL);
+	nng_msleep(300);
+	snprintf(empty_pub_command, sizeof(empty_pub_command),
+	    "mosquitto_pub -h 127.0.0.1 -p %s -t rule/alive -m alive -q 1",
+	    test_port);
+	pub = test_env_popen(empty_pub_command, "r");
+	assert(pub != NULL);
+	assert(test_env_pclose_timeout(pub, 10000) == 0);
+	assert(test_env_read_stream_timeout(
+	    sub, empty_output, sizeof(empty_output), 9000, 25));
+	assert(strstr(empty_output, "alive") != NULL);
+	assert(test_env_pclose_timeout(sub, 2000) == 0);
+
+	// Both messages are in the rule's own table (the default rule database).
+	const char *empty_queries[] = {
+		"SELECT COUNT(*) FROM rule_empty_payload "
+		"WHERE Topic = 'rule/empty' AND Payload = 'stored'",
+		"SELECT COUNT(*) FROM rule_empty_payload "
+		"WHERE Topic = 'rule/empty' AND Payload = ''",
+	};
+	sqlite3 *rule_db = NULL;
+	assert(sqlite3_open("/tmp/rule_engine.db", &rule_db) == SQLITE_OK);
+	for (size_t qi = 0;
+	     qi < sizeof(empty_queries) / sizeof(empty_queries[0]); qi++) {
+		sqlite3_stmt *stmt = NULL;
+		assert(sqlite3_prepare_v2(rule_db, empty_queries[qi], -1, &stmt,
+		           NULL) == SQLITE_OK);
+		assert(sqlite3_step(stmt) == SQLITE_ROW);
+		assert(sqlite3_column_int(stmt, 0) >= 1);
+		sqlite3_finalize(stmt);
+	}
+	sqlite3_close(rule_db);
+#endif
 #endif
 
 	broker_stop_for_test();
