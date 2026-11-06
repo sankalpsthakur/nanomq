@@ -764,7 +764,9 @@ sbuf_appendf(sbuf_t *sb, const char *fmt, ...)
 
 static char *sql_escape(const char *s)
 {
-    if (!s) return NULL;
+    // An empty payload has no buffer (data is NULL). Callers pass the result
+    // straight to strlen() and "%s", so escape a NULL field as "".
+    if (!s) s = "";
 
     size_t len = strlen(s);
     char *out = malloc(len * 2 + 1);
@@ -898,7 +900,7 @@ compose_sql_clause(rule *info, char *key, char *value,
 
     case RULE_PAYLOAD_FIELD:
 		sbuf_init(&key_sb,   512);
-    	sbuf_init(&val_sb, strlen(pp->payload.data)*2);
+    	sbuf_init(&val_sb, pp->payload.len * 2);
 
         for (int i = 0; i < cvector_size(info->payload); i++) {
             rule_payload *p = info->payload[i];
@@ -1085,7 +1087,7 @@ compose_sql_clause_new(rule *info, sbuf_t *key, sbuf_t *value,
 
     case RULE_PAYLOAD_FIELD:
 		sbuf_init(&key_sb,   512);
-    	sbuf_init(&val_sb, strlen(pp->payload.data)*2);
+    	sbuf_init(&val_sb, pp->payload.len * 2);
 
         for (int i = 0; i < cvector_size(info->payload); i++) {
             rule_payload *p = info->payload[i];
@@ -1332,7 +1334,8 @@ rule_engine_insert_sql(nano_work *work)
 
 #if defined(NNG_SUPP_SQLITE)
 			if (RULE_ENG_SDB & work->config->rule_eng.option && RULE_FORWORD_SQLITE == rules[i].forword_type) {
-				if (rule_engine_insert_sqlite(&rules[i], work->config->rule_eng.rule_mutex, i, work, &is_first_time, &is_need_set)) {
+				// rule_engine_insert_sqlite() indexes rules[i] itself
+				if (rule_engine_insert_sqlite(rules, work->config->rule_eng.rule_mutex, i, work, &is_first_time, &is_need_set)) {
 					return 1;
 				}
 			}
